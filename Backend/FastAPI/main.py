@@ -10,3 +10,7 @@ async def root():
 @app.get("/url")        
 async def url():
     return {"url_curso" : "https://mouredev.com/python"}
+
+
+# iniciar el server: uvicorn main:app --reload
+# C + ctrl 
