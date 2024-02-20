@@ -1,16 +1,20 @@
 from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
- # OAuth2PasswordBearer = se encarga de gestionar la autenticacion del usuario y contraseña
- # OAuth2PasswordRequestForm = la forma en la que se va a enviar desde el cliente el usuario y contraseña 
- #  y la forma en la que el backend captura el usuario y contraseña para comprobar si es un usuario de nuestro sistema
+from jose import jwt, JWTError
+from passlib.context import CryptContext
+from datetime import datetime, timedelta
+
+ALGORITHM = "HS256"
+ACCESS_TOKEN_DURATION = 1
+SECRET = "16d44d487e423d1b3b6a373ed78abfe35c3c77b3d313f4c94bdf653729a5c29f"
 
 app = FastAPI()
-# instancia de sistema de oauth2 (un standar de como tenemos que trabajar con nuesto api)
 
 oauth2 = OAuth2PasswordBearer(tokenUrl="login")
 
-
+crypt = CryptContext(schemes=["bcrypt"])
 
 class User(BaseModel):
     username: str
@@ -27,46 +31,56 @@ users_db = {
         "full_name": "Brais Moure",
         "email": "braismoure@moredev.com",
         "disable": False,
-        "password": "123456"
+        "password": "$2a$12$9uzQ6qXEPPt3ixC.OTWv6uZFNCO9TZ1BrQgQOMOLxxJEr8uTMllO."
     },
     "mouredev2": {
         "username": "mouredev2",
         "full_name": "Brais Moure 2",
         "email": "braismoure2@moredev.com",
         "disable": True,
-        "password": "654321"
+        "password": "$2a$12$dRQDTqvjOWxy6T0jjXbDfugNOGP3CEWzv2R3TDoBBom/1HrAJFJFO"
     } 
 }
 
-
-# mecanismo que busca en la base de datos si esta el usuario
 def search_user_db(username: str): 
     if username in users_db:
         return UserDB(**users_db[username])
+
 
 def search_user(username: str):
     if username in users_db:
         return User(**users_db[username])
 
-  
-# criterio de dependecia
-async def current_user(token: str = Depends(oauth2)):
-    user = search_user(token)
-    if not user:
-        raise HTTPException(
+
+
+async def auth_user(token: str = Depends(oauth2)):
+    exeption = HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Credenciales de autenticación inválidas",
             headers={"WWW-Authenticate": "Bearer"})
+    
+    try:
+        username = jwt.decode(token, SECRET, algorithms=[ALGORITHM]).get("sub")
+        if username is None:
+             raise exeption
+         
+    except JWTError:
+        raise exeption
+    
+    return search_user(username)
 
-    if user.disabled:
+
+
+
+
+async def current_user(user: User = Depends(auth_user)):
+    if user.disable:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Usuario inactivo")
-
     return user
 
 
-# operacion que es capaz de autenticarnos 
 @app.post("/login")
 async def login(form: OAuth2PasswordRequestForm = Depends()):
     user_db = users_db.get(form.username)
@@ -75,16 +89,20 @@ async def login(form: OAuth2PasswordRequestForm = Depends()):
             status_code=status.HTTP_400_BAD_REQUEST, detail="El usuario no es correcto")
         
     user = search_user_db(form.username)
-    if not form.password == user.password:
+
+    if not crypt.verify(form.password, user.password):
           raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="La contraseña no es correcta")
+    
+    access_token = {
+        "sub": user.username,
+        "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_DURATION)
+    }
           
-          
-    return {"access_token": user.username , "token_type": "beared"} #el tipo de token es beared esto es dentro de un standar 
-# el access token es el token de autenticacion, como backend puede decirle siempre que me pases algo que para mi es correcto (token) yo te voy a mostrar los datos. Sino deberiamos 
-# darle al  backend todo el tiempo el usuario y contraseña.  # en realidad en casi todos los casos se usa un access_token cifrado
-
+    return {"access_token": jwt.encode(access_token, SECRET, algorithm=ALGORITHM), "token_type": "beared"}
 
 @app.get("/users/me")
-async def me(user: User = Depends(current_user)): # depende de que el usario este autenticado
+async def me(user: User = Depends(current_user)): 
     return user
+
+
